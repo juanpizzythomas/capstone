@@ -3,8 +3,9 @@ import { useAuth } from '@/context/AuthContext';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import { Button } from '@/components/ui/button';
 import { useToast } from '@/hooks/use-toast';
-import { CalendarDays, UserCheck, Users, User, FileText, CheckCircle, X, Camera } from 'lucide-react';
+import { CalendarDays, UserCheck, Users, User, FileText, CheckCircle, X, Camera, MapPin, AlertCircle } from 'lucide-react';
 import { attendanceService } from '@/services/attendanceService';
+import { geolocationService, LocationData, DistanceResult } from '@/services/geolocationService';
 
 const Dashboard: React.FC = () => {
   const { user } = useAuth();
@@ -14,6 +15,9 @@ const Dashboard: React.FC = () => {
   const [cameraReady, setCameraReady] = useState(false);
   const [isProcessing, setIsProcessing] = useState(false);
   const [stream, setStream] = useState<MediaStream | null>(null);
+  const [currentLocation, setCurrentLocation] = useState<LocationData | null>(null);
+  const [distanceInfo, setDistanceInfo] = useState<DistanceResult | null>(null);
+  const [locationWatchId, setLocationWatchId] = useState<number | null>(null);
   const videoRef = useRef<HTMLVideoElement>(null);
   const canvasRef = useRef<HTMLCanvasElement>(null);
 
@@ -25,6 +29,40 @@ const Dashboard: React.FC = () => {
       }
     };
   }, [stream]);
+
+  // Monitor user location in real-time
+  useEffect(() => {
+    if (user?.role === 'Karyawan') {
+      const watchId = geolocationService.watchLocation((location) => {
+        setCurrentLocation(location);
+        const distance = geolocationService.calculateDistance(location.latitude, location.longitude);
+        setDistanceInfo(distance);
+
+        // Show notification if user is outside check-in range but within notification range
+        if (distance.status === 'near-office' && !isCheckedIn) {
+          toast({
+            title: "Hampir Sampai Kantor",
+            description: distance.message,
+            variant: "default"
+          });
+        } else if (distance.status === 'far-office' && !isCheckedIn) {
+          toast({
+            title: "Terlalu Jauh dari Kantor",
+            description: distance.message,
+            variant: "destructive"
+          });
+        }
+      });
+
+      setLocationWatchId(watchId);
+
+      return () => {
+        if (watchId) {
+          geolocationService.clearWatch(watchId);
+        }
+      };
+    }
+  }, [user, isCheckedIn, toast]);
 
   const startCamera = useCallback(async () => {
     try {
@@ -283,8 +321,18 @@ const handleCheckIn = async () => {
     return;
   }
 
+  // Check location first
+  if (!distanceInfo || !distanceInfo.canCheckIn) {
+    toast({
+      title: "Tidak Bisa Check In",
+      description: distanceInfo?.message || "Anda terlalu jauh dari kantor untuk melakukan absen",
+      variant: "destructive"
+    });
+    return;
+  }
+
   setAttendanceMode("checkin");
-  await startCamera();   // ✅ cuma buka kamera
+  await startCamera();
 };
 
 const handleCheckOut = async () => {
@@ -297,8 +345,18 @@ const handleCheckOut = async () => {
     return;
   }
 
+  // Check location first
+  if (!distanceInfo || !distanceInfo.canCheckIn) {
+    toast({
+      title: "Tidak Bisa Check Out",
+      description: distanceInfo?.message || "Anda terlalu jauh dari kantor untuk melakukan absen",
+      variant: "destructive"
+    });
+    return;
+  }
+
   setAttendanceMode("checkout");
-  await startCamera();   // ✅ cuma buka kamera
+  await startCamera();
 };
 
 const [stats, setStats] = useState<{ 
@@ -389,7 +447,7 @@ const attendedDays = monthlyRecords.filter(r => r.check_in_time).length;
               <Button
                 onClick={handleCheckIn}
                 className="h-12 px-6 bg-green-500 hover:bg-green-600"
-                disabled={showCamera}
+                disabled={showCamera || (distanceInfo && !distanceInfo.canCheckIn)}
               >
                 <Camera className="h-4 w-4 mr-2" />
                 {showCamera ? 'Camera Active' : 'Check In'}
@@ -398,6 +456,7 @@ const attendedDays = monthlyRecords.filter(r => r.check_in_time).length;
               <Button
                 onClick={handleCheckOut}
                 className="h-12 px-6 bg-red-500 hover:bg-red-600"
+                disabled={distanceInfo && !distanceInfo.canCheckIn}
               >
                 Check Out
               </Button>
@@ -453,6 +512,41 @@ const attendedDays = monthlyRecords.filter(r => r.check_in_time).length;
       )}
 
       <canvas ref={canvasRef} style={{ display: 'none' }} />
+
+      {/* Location Status Card */}
+      {user?.role === 'Karyawan' && distanceInfo && (
+        <Card className={`border-2 ${distanceInfo.canCheckIn ? 'border-green-500' : distanceInfo.status === 'near-office' ? 'border-yellow-500' : 'border-red-500'}`}>
+          <CardContent className="p-6">
+            <div className="flex items-start space-x-4">
+              <div className={`p-3 rounded-full ${distanceInfo.canCheckIn ? 'bg-green-100' : distanceInfo.status === 'near-office' ? 'bg-yellow-100' : 'bg-red-100'}`}>
+                <MapPin className={`h-6 w-6 ${distanceInfo.canCheckIn ? 'text-green-600' : distanceInfo.status === 'near-office' ? 'text-yellow-600' : 'text-red-600'}`} />
+              </div>
+              <div className="flex-1">
+                <div className="flex items-center space-x-2 mb-1">
+                  <h3 className="text-lg font-semibold text-gray-900">Status Lokasi</h3>
+                  {distanceInfo.canCheckIn ? (
+                    <span className="px-2 py-1 bg-green-100 text-green-800 text-xs font-medium rounded-full">Dalam Jangkauan</span>
+                  ) : (
+                    <span className="px-2 py-1 bg-red-100 text-red-800 text-xs font-medium rounded-full">Diluar Jangkauan</span>
+                  )}
+                </div>
+                <p className="text-gray-700 mb-2">{distanceInfo.message}</p>
+                <div className="flex items-center space-x-4 text-sm text-gray-600">
+                  <div className="flex items-center space-x-1">
+                    <AlertCircle className="h-4 w-4" />
+                    <span>Jarak: {geolocationService.formatDistance(distanceInfo.distance)}</span>
+                  </div>
+                  {currentLocation && (
+                    <div className="text-xs text-gray-500">
+                      Akurasi: {Math.round(currentLocation.accuracy)}m
+                    </div>
+                  )}
+                </div>
+              </div>
+            </div>
+          </CardContent>
+        </Card>
+      )}
 
       {/* Stats */}
       <div className="grid grid-cols-1 md:grid-cols-3 gap-6">
