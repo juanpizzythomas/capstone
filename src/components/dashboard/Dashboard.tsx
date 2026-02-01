@@ -160,42 +160,31 @@ const processAttendance = async () => {
 
     freezeCamera(); // ✅ freeze frame, jangan close modal
 
-    navigator.geolocation.getCurrentPosition(async (pos) => {
-      const lat = pos.coords.latitude;
-      const lon = pos.coords.longitude;
+    // Mengambil koordinat menggunakan browser navigator object untuk geotagging
+    const location = await geolocationService.getCurrentLocation();
+    const lat = location.latitude;
+    const lon = location.longitude;
 
-      try {
-        const res = await attendanceService.checkIn(imageData, lat, lon);
-        console.log("Check-in response:", res);
+    const res = await attendanceService.checkIn(imageData, lat, lon);
+    console.log("Check-in response:", res);
 
-        if (res.success) {
-          setIsCheckedIn(true);          // tandai sudah checkin
-          setAttendanceMode("checkout"); // ubah tombol jadi checkout
-          toast({
-            title: "Check In Successful",
-            description: `You have successfully checked in at ${new Date().toLocaleTimeString()}`,
-          });
-          stopCamera();
-        } else {
-          setIsCheckedIn(false);         // gagal → tetap dianggap belum checkin
-          setAttendanceMode("checkin");  
-          toast({
-            title: "Check In Failed",
-            description: res.error || "Face not recognized or location invalid",
-            variant: "destructive",
-          });
-        }
-      } catch (err: any) {
-        console.error("Check-in request error:", err);
-        toast({
-          title: "Check In Failed",
-          description: err.message,
-          variant: "destructive",
-        });
-      } finally {
-        setIsProcessing(false);
-      }
-    });
+    if (res.success) {
+      setIsCheckedIn(true);          // tandai sudah checkin
+      setAttendanceMode("checkout"); // ubah tombol jadi checkout
+      toast({
+        title: "Check In Successful",
+        description: `You have successfully checked in at ${new Date().toLocaleTimeString()}`,
+      });
+      stopCamera();
+    } else {
+      setIsCheckedIn(false);         // gagal → tetap dianggap belum checkin
+      setAttendanceMode("checkin");
+      toast({
+        title: "Check In Failed",
+        description: res.error || "Face not recognized or location invalid",
+        variant: "destructive",
+      });
+    }
   } catch (error) {
     console.error("Attendance processing error:", error);
     toast({
@@ -203,6 +192,7 @@ const processAttendance = async () => {
       description: error instanceof Error ? error.message : "An error occurred",
       variant: "destructive",
     });
+  } finally {
     setIsProcessing(false);
   }
 };
@@ -217,51 +207,31 @@ const processAttendance = async () => {
 
     freezeCamera(); // ✅ freeze frame setelah capture
 
-    navigator.geolocation.getCurrentPosition(async (pos) => {
-      const lat = pos.coords.latitude;
-      const lon = pos.coords.longitude;
+    // Mengambil koordinat menggunakan browser navigator object untuk geotagging
+    const location = await geolocationService.getCurrentLocation();
+    const lat = location.latitude;
+    const lon = location.longitude;
 
-      try {
-        const res = await attendanceService.checkOut(imageData, lat, lon);
-        console.log("Check-out response:", res);
+    const res = await attendanceService.checkOut(imageData, lat, lon);
+    console.log("Check-out response:", res);
 
-        if (res.success) {
-          setIsCheckedIn(false);        // tandai sudah checkout
-          setAttendanceMode("checkin"); // tombol kembali checkin
-          stopCamera();
-          toast({
-            title: "Check Out Successful",
-            description: `You have successfully checked out at ${new Date().toLocaleTimeString()}`,
-          });
-        } else {
-          setIsCheckedIn(true);         // gagal checkout → user tetap dianggap checkin
-          setAttendanceMode("checkout");
-          toast({
-            title: "Check Out Failed",
-            description: res.error || "Face not recognized or location invalid",
-            variant: "destructive"
-          });
-        }
-      } catch (err: any) {
-        console.error("Check-out request error:", err);
-        toast({
-          title: "Check Out Failed",
-          description: err.message,
-          variant: "destructive",
-        });
-      } finally {
-        setIsProcessing(false);
-      }
-    }, (err) => {
-      console.error("Geolocation error:", err);
+    if (res.success) {
+      setIsCheckedIn(false);        // tandai sudah checkout
+      setAttendanceMode("checkin"); // tombol kembali checkin
+      stopCamera();
       toast({
-        title: "Location Error",
-        description: "Unable to get your location",
+        title: "Check Out Successful",
+        description: `You have successfully checked out at ${new Date().toLocaleTimeString()}`,
+      });
+    } else {
+      setIsCheckedIn(true);         // gagal checkout → user tetap dianggap checkin
+      setAttendanceMode("checkout");
+      toast({
+        title: "Check Out Failed",
+        description: res.error || "Face not recognized or location invalid",
         variant: "destructive"
       });
-      setIsProcessing(false);
-    }, { enableHighAccuracy: true });
-
+    }
   } catch (error) {
     console.error("Checkout processing error:", error);
     toast({
@@ -269,6 +239,7 @@ const processAttendance = async () => {
       description: error instanceof Error ? error.message : "An error occurred",
       variant: "destructive",
     });
+  } finally {
     setIsProcessing(false);
   }
 };
