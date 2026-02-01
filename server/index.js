@@ -6,6 +6,7 @@ const { Client } = require('pg');
 const bcrypt = require('bcrypt');
 const jwt = require('jsonwebtoken');
 const ExcelJS = require("exceljs");
+const cron = require('node-cron');
 const { sendAttendanceReminder } = require('./emailService');
 // geolocation
 const OFFICE_LAT = parseFloat(process.env.OFFICE_LAT || '-6.241977 '); // latitude kantor scbd = '-6.22849'
@@ -741,6 +742,52 @@ app.get('/api/attendance/summary', authenticateToken, async (req, res) => {
   }
 });
 
+/**
+ * Mencari karyawan yang belum absen hari ini dan mengirimkan email pengingat.
+ * Digunakan oleh endpoint manual dan cron job otomatis.
+ */
+async function remindAbsentEmployees() {
+  console.log(`[Reminder] Memulai proses pengingat otomatis pada ${new Date().toLocaleString()}`);
+
+  // Ambil karyawan yang belum absen hari ini
+  const absentUsersRes = await client.query(`
+    SELECT id, email, full_name
+    FROM users
+    WHERE is_approved = true
+      AND is_active = true
+      AND role = 'Karyawan'
+      AND id NOT IN (
+        SELECT user_id
+        FROM attendance_records
+        WHERE attendance_date = CURRENT_DATE
+      )
+  `);
+
+  const absentUsers = absentUsersRes.rows;
+  console.log(`[Reminder] Ditemukan ${absentUsers.length} karyawan yang belum absen.`);
+
+  const results = await Promise.allSettled(absentUsers.map(async (user) => {
+    try {
+      await sendAttendanceReminder(user.email, user.full_name);
+      return { email: user.email, status: 'sent' };
+    } catch (emailErr) {
+      console.error(`Failed to send email to ${user.email}:`, emailErr);
+      return { email: user.email, status: 'failed', error: emailErr.message };
+    }
+  }));
+
+  const details = results.map(r => r.value);
+  const totalSent = details.filter(r => r.status === 'sent').length;
+
+  console.log(`[Reminder] Selesai. Email terkirim: ${totalSent}/${absentUsers.length}`);
+
+  return {
+    success: true,
+    totalReminded: totalSent,
+    details
+  };
+}
+
 // endpoint remind absent employees (Admin/HR only)
 app.post('/api/attendance/remind-absent', authenticateToken, async (req, res) => {
   try {
@@ -748,39 +795,8 @@ app.post('/api/attendance/remind-absent', authenticateToken, async (req, res) =>
       return res.status(403).json({ error: 'Forbidden: Admin/HR access required' });
     }
 
-    // Ambil karyawan yang belum absen hari ini
-    const absentUsersRes = await client.query(`
-      SELECT id, email, full_name
-      FROM users
-      WHERE is_approved = true
-        AND is_active = true
-        AND role = 'Karyawan'
-        AND id NOT IN (
-          SELECT user_id
-          FROM attendance_records
-          WHERE attendance_date = CURRENT_DATE
-        )
-    `);
-
-    const absentUsers = absentUsersRes.rows;
-
-    const results = await Promise.allSettled(absentUsers.map(async (user) => {
-      try {
-        await sendAttendanceReminder(user.email, user.full_name);
-        return { email: user.email, status: 'sent' };
-      } catch (emailErr) {
-        console.error(`Failed to send email to ${user.email}:`, emailErr);
-        return { email: user.email, status: 'failed', error: emailErr.message };
-      }
-    }));
-
-    const responseDetails = results.map(r => r.value);
-
-    res.json({
-      success: true,
-      totalReminded: responseDetails.filter(r => r.status === 'sent').length,
-      details: responseDetails
-    });
+    const result = await remindAbsentEmployees();
+    res.json(result);
   } catch (err) {
     console.error("Remind absent error:", err);
     res.status(500).json({ error: "Internal server error" });
@@ -838,6 +854,18 @@ app.get('/api/attendance/export', authenticateToken, async (req, res) => {
     console.error("Export Excel error:", err);
     res.status(500).json({ error: "Internal server error" });
   }
+});
+
+// Setup automated reminder cron job (Setiap hari jam 08:00 AM)
+cron.schedule('0 8 * * *', async () => {
+  try {
+    await remindAbsentEmployees();
+  } catch (err) {
+    console.error("[Cron] Error running automated reminder:", err);
+  }
+}, {
+  scheduled: true,
+  timezone: "Asia/Jakarta" // Sesuaikan dengan timezone kantor
 });
 
 (async () => {
