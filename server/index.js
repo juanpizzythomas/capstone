@@ -6,6 +6,7 @@ const { Client } = require('pg');
 const bcrypt = require('bcrypt');
 const jwt = require('jsonwebtoken');
 const ExcelJS = require("exceljs");
+const { sendAttendanceReminder } = require('./emailService');
 // geolocation
 const OFFICE_LAT = parseFloat(process.env.OFFICE_LAT || '-6.241977 '); // latitude kantor scbd = '-6.22849'
 const OFFICE_LON = parseFloat(process.env.OFFICE_LON || '106.978994'); // longitude kantor scbd = '106.80688'
@@ -737,6 +738,52 @@ app.get('/api/attendance/summary', authenticateToken, async (req, res) => {
   } catch (err) {
     console.error("Summary fetch error:", err);
     return res.status(500).json({ error: "Internal server error" });
+  }
+});
+
+// endpoint remind absent employees (Admin/HR only)
+app.post('/api/attendance/remind-absent', authenticateToken, async (req, res) => {
+  try {
+    if (!['Admin', 'HR'].includes(req.user.role)) {
+      return res.status(403).json({ error: 'Forbidden: Admin/HR access required' });
+    }
+
+    // Ambil karyawan yang belum absen hari ini
+    const absentUsersRes = await client.query(`
+      SELECT id, email, full_name
+      FROM users
+      WHERE is_approved = true
+        AND is_active = true
+        AND role = 'Karyawan'
+        AND id NOT IN (
+          SELECT user_id
+          FROM attendance_records
+          WHERE attendance_date = CURRENT_DATE
+        )
+    `);
+
+    const absentUsers = absentUsersRes.rows;
+
+    const results = await Promise.allSettled(absentUsers.map(async (user) => {
+      try {
+        await sendAttendanceReminder(user.email, user.full_name);
+        return { email: user.email, status: 'sent' };
+      } catch (emailErr) {
+        console.error(`Failed to send email to ${user.email}:`, emailErr);
+        return { email: user.email, status: 'failed', error: emailErr.message };
+      }
+    }));
+
+    const responseDetails = results.map(r => r.value);
+
+    res.json({
+      success: true,
+      totalReminded: responseDetails.filter(r => r.status === 'sent').length,
+      details: responseDetails
+    });
+  } catch (err) {
+    console.error("Remind absent error:", err);
+    res.status(500).json({ error: "Internal server error" });
   }
 });
 

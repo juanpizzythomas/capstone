@@ -106,6 +106,11 @@ async getSummary() {
     return res.data;
   },
 
+  async sendReminders() {
+    const response = await apiClient.post('/attendance/remind-absent');
+    return response.data;
+  },
+
   // 🔹 Ambil riwayat absensi per user
   async getUserAttendanceHistory(userId: string, startDate?: string, endDate?: string): Promise<AttendanceRecord[]> {
     const params = new URLSearchParams();
