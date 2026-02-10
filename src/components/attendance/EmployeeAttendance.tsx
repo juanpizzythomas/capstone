@@ -6,7 +6,7 @@ import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
 import { useToast } from '@/hooks/use-toast';
-import { FileText, CalendarDays } from 'lucide-react';
+import { FileText, CalendarDays, Mail } from 'lucide-react';
 import { AttendanceRecord } from '@/types/user';
 import { attendanceService } from '@/services/attendanceService';
 
@@ -18,6 +18,8 @@ const EmployeeAttendance: React.FC = () => {
 
   const [attendanceRecords, setAttendanceRecords] = useState<AttendanceRecord[]>([]);
   const [loading, setLoading] = useState(true);
+  const [sendingReminders, setSendingReminders] = useState(false);
+
   useEffect(() => {
   const fetchAll = async () => {
     try {
@@ -59,6 +61,26 @@ const EmployeeAttendance: React.FC = () => {
         return <Badge variant="secondary">{status}</Badge>;
     }
   };
+
+const sendReminders = async () => {
+  setSendingReminders(true);
+  try {
+    const res = await attendanceService.sendReminders();
+    toast({
+      title: "Reminders Sent",
+      description: `Successfully sent reminders to ${res.totalReminded} employees.`,
+    });
+  } catch (err) {
+    toast({
+      title: "Failed to Send Reminders",
+      description: "An error occurred while sending email reminders.",
+      variant: "destructive",
+    });
+    console.error("Reminder error:", err);
+  } finally {
+    setSendingReminders(false);
+  }
+};
 
 const exportToExcel = async () => {
   try {
@@ -183,6 +205,16 @@ useEffect(() => {
                 className="w-full md:w-40"
               />
               
+              <Button
+                onClick={sendReminders}
+                disabled={sendingReminders}
+                variant="outline"
+                className="border-blue-500 text-blue-600 hover:bg-blue-50"
+              >
+                <Mail className="h-4 w-4 mr-2" />
+                {sendingReminders ? 'Sending...' : 'Send Reminders'}
+              </Button>
+
               <Button 
                 onClick={exportToExcel}
                 className="bg-green-500 hover:bg-green-600"
