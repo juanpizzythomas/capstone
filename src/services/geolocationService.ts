@@ -36,6 +36,7 @@ function haversineDistance(lat1: number, lon1: number, lat2: number, lon2: numbe
 }
 
 export const geolocationService = {
+  // Menggunakan browser navigator object (navigator.geolocation) untuk mengambil koordinat lokasi (geotagging)
   getCurrentLocation: (): Promise<LocationData> => {
     return new Promise((resolve, reject) => {
       if (!navigator.geolocation) {
@@ -43,6 +44,7 @@ export const geolocationService = {
         return;
       }
 
+      // Memanggil API navigator.geolocation untuk mendapatkan posisi saat ini
       navigator.geolocation.getCurrentPosition(
         (position) => {
           resolve({
