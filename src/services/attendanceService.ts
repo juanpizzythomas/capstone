@@ -94,10 +94,19 @@ checkOut: async (imageData: string, latitude: number, longitude: number, deviceI
   }));
 },
 
-async getSummary() {
-  const response = await apiClient.get('/attendance/summary');
+async getSummary(date?: string) {
+  const response = await apiClient.get('/attendance/summary', {
+    params: { date }
+  });
   return response.data;
 },
+
+  async getChartData(date?: string) {
+    const response = await apiClient.get('/attendance/chart-data', {
+      params: { date }
+    });
+    return response.data;
+  },
 
   async exportAttendance() {
     const res = await apiClient.get('/attendance/export', {

@@ -6,6 +6,8 @@ const { Client } = require('pg');
 const bcrypt = require('bcrypt');
 const jwt = require('jsonwebtoken');
 const ExcelJS = require("exceljs");
+const cron = require('node-cron');
+const { sendAttendanceReminder } = require('./emailService');
 // geolocation
 const OFFICE_LAT = parseFloat(process.env.OFFICE_LAT || '-6.241977 '); // latitude kantor scbd = '-6.22849'
 const OFFICE_LON = parseFloat(process.env.OFFICE_LON || '106.978994'); // longitude kantor scbd = '106.80688'
@@ -707,32 +709,51 @@ app.post('/api/attendance/checkout', authenticateToken, async (req, res) => {
 // data riwayat kehadiran karyawan (Header HR)
 app.get('/api/attendance/summary', authenticateToken, async (req, res) => {
   try {
+    const { date } = req.query;
+    const targetDate = date ? `$1::date` : 'CURRENT_DATE';
+    const params = date ? [date] : [];
+
     // Total employee
-    const totalUsersRes = await client.query(`SELECT COUNT(*) FROM users WHERE is_approved = true`);
+    const totalUsersRes = await client.query(`SELECT COUNT(*) FROM users WHERE is_approved = true AND role = 'Karyawan'`);
     const totalUsers = parseInt(totalUsersRes.rows[0].count, 10);
 
-    // Present today
+    // Present
     const presentRes = await client.query(
       `SELECT COUNT(*) FROM attendance_records 
-       WHERE attendance_date = CURRENT_DATE AND status = 'Present'`
+       WHERE attendance_date = ${targetDate} AND status = 'Present'`,
+       params
     );
     const presentToday = parseInt(presentRes.rows[0].count, 10);
 
-    // Late today
+    // Late
     const lateRes = await client.query(
       `SELECT COUNT(*) FROM attendance_records 
-       WHERE attendance_date = CURRENT_DATE AND status = 'Late'`
+       WHERE attendance_date = ${targetDate} AND status = 'Late'`,
+       params
     );
     const lateToday = parseInt(lateRes.rows[0].count, 10);
 
-    // Absent today = total user - hadir (present+late)
-    const absentToday = totalUsers - (presentToday + lateToday);
+    // Absent
+    const absentRes = await client.query(
+      `SELECT COUNT(*) FROM attendance_records
+       WHERE attendance_date = ${targetDate} AND status = 'Absent'`,
+       params
+    );
+    let absentToday = parseInt(absentRes.rows[0].count, 10);
+
+    // If it's today and we haven't run the auto-absent yet, calculate manually
+    if (!date || date === new Date().toISOString().split('T')[0]) {
+      const recorded = presentToday + lateToday + absentToday;
+      if (totalUsers > recorded) {
+        absentToday = totalUsers - presentToday - lateToday;
+      }
+    }
 
     return res.json({
       totalEmployees: totalUsers,
       presentToday,
       lateToday,
-      absentToday
+      absentToday: absentToday > 0 ? absentToday : 0
     });
   } catch (err) {
     console.error("Summary fetch error:", err);
@@ -791,6 +812,151 @@ app.get('/api/attendance/export', authenticateToken, async (req, res) => {
     console.error("Export Excel error:", err);
     res.status(500).json({ error: "Internal server error" });
   }
+});
+
+app.get('/api/attendance/chart-data', authenticateToken, async (req, res) => {
+  try {
+    const { date } = req.query;
+    const dateFilter = date ? `$1::date` : 'CURRENT_DATE';
+
+    let pieData = [];
+    let barData = [];
+
+    if (req.user.role === 'Karyawan') {
+      const statsRes = await client.query(`
+        SELECT status, COUNT(*) as count
+        FROM attendance_records
+        WHERE user_id = $1
+        GROUP BY status
+      `, [req.user.id]);
+
+      pieData = statsRes.rows.map(row => ({
+        name: row.status,
+        value: parseInt(row.count, 10),
+        color: row.status === 'Present' ? '#10b981' : row.status === 'Late' ? '#f59e0b' : '#ef4444'
+      }));
+
+      const weeklyRes = await client.query(`
+        SELECT
+          attendance_date,
+          COUNT(*) FILTER (WHERE status IN ('Present', 'Late')) as present,
+          COUNT(*) FILTER (WHERE status = 'Absent') as absent
+        FROM attendance_records
+        WHERE user_id = $1 AND attendance_date >= CURRENT_DATE - INTERVAL '6 days'
+        GROUP BY attendance_date
+        ORDER BY attendance_date ASC
+      `, [req.user.id]);
+
+      barData = weeklyRes.rows.map(row => ({
+        name: new Date(row.attendance_date).toLocaleDateString('id-ID', { weekday: 'short' }),
+        present: parseInt(row.present, 10),
+        absent: parseInt(row.absent, 10)
+      }));
+    } else {
+      const params = date ? [date] : [];
+      const totalUsersRes = await client.query(`SELECT COUNT(*) FROM users WHERE is_approved = true AND role = 'Karyawan'`);
+      const totalUsers = parseInt(totalUsersRes.rows[0].count, 10);
+
+      const presentRes = await client.query(`SELECT COUNT(*) FROM attendance_records WHERE attendance_date = ${dateFilter} AND status = 'Present'`, params);
+      const present = parseInt(presentRes.rows[0].count, 10);
+
+      const lateRes = await client.query(`SELECT COUNT(*) FROM attendance_records WHERE attendance_date = ${dateFilter} AND status = 'Late'`, params);
+      const late = parseInt(lateRes.rows[0].count, 10);
+
+      const absent = totalUsers - (present + late);
+
+      pieData = [
+        { name: 'Present', value: present, color: '#10b981' },
+        { name: 'Late', value: late, color: '#f59e0b' },
+        { name: 'Absent', value: absent > 0 ? absent : 0, color: '#ef4444' }
+      ];
+
+      const weeklyRes = await client.query(`
+        SELECT
+          attendance_date,
+          COUNT(*) FILTER (WHERE status IN ('Present', 'Late')) as present,
+          COUNT(*) FILTER (WHERE status = 'Absent') as absent
+        FROM attendance_records
+        WHERE attendance_date >= CURRENT_DATE - INTERVAL '6 days'
+        GROUP BY attendance_date
+        ORDER BY attendance_date ASC
+      `);
+
+      barData = weeklyRes.rows.map(row => ({
+        name: new Date(row.attendance_date).toLocaleDateString('id-ID', { weekday: 'short' }),
+        present: parseInt(row.present, 10),
+        absent: parseInt(row.absent, 10)
+      }));
+    }
+
+    res.json({ pieData, barData });
+  } catch (error) {
+    console.error('Error fetching chart data:', error);
+    res.status(500).json({ error: 'Internal server error' });
+  }
+});
+
+// Cron job for 08:00 AM reminders
+cron.schedule('0 8 * * *', async () => {
+  const now = new Date();
+  const dayOfWeek = now.getDay(); // 0 is Sunday, 6 is Saturday
+  if (dayOfWeek === 0 || dayOfWeek === 6) {
+    console.log('Skipping 08:00 AM reminder on weekend');
+    return;
+  }
+
+  console.log('Running 08:00 AM attendance reminder cron job');
+  try {
+    const today = new Date().toISOString().split('T')[0];
+    const result = await client.query(`
+      SELECT id, email, full_name FROM users
+      WHERE role = 'Karyawan' AND is_active = true AND is_approved = true
+      AND id NOT IN (
+        SELECT user_id FROM attendance_records WHERE attendance_date = $1
+      )
+    `, [today]);
+
+    for (const user of result.rows) {
+      await sendAttendanceReminder(user.email, user.full_name);
+    }
+  } catch (error) {
+    console.error('Error in 08:00 AM cron job:', error);
+  }
+}, {
+  timezone: "Asia/Jakarta"
+});
+
+// Cron job for 09:00 AM auto-absent
+cron.schedule('0 9 * * *', async () => {
+  const now = new Date();
+  const dayOfWeek = now.getDay(); // 0 is Sunday, 6 is Saturday
+  if (dayOfWeek === 0 || dayOfWeek === 6) {
+    console.log('Skipping auto-absent check on weekend');
+    return;
+  }
+
+  console.log('Running 09:00 AM auto-absent cron job');
+  try {
+    const today = new Date().toISOString().split('T')[0];
+    const result = await client.query(`
+      SELECT id FROM users
+      WHERE role = 'Karyawan' AND is_active = true AND is_approved = true
+      AND id NOT IN (
+        SELECT user_id FROM attendance_records WHERE attendance_date = $1
+      )
+    `, [today]);
+
+    for (const user of result.rows) {
+      await client.query(`
+        INSERT INTO attendance_records (user_id, attendance_date, status, created_at, updated_at)
+        VALUES ($1, $2, 'Absent', NOW(), NOW())
+      `, [user.id, today]);
+    }
+  } catch (error) {
+    console.error('Error in 09:00 AM cron job:', error);
+  }
+}, {
+  timezone: "Asia/Jakarta"
 });
 
 (async () => {

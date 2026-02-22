@@ -5,6 +5,16 @@ import { Button } from '@/components/ui/button';
 import { Badge } from '@/components/ui/badge';
 import { useToast } from '@/hooks/use-toast';
 import { UserCheck, UserX } from 'lucide-react';
+import {
+  AlertDialog,
+  AlertDialogAction,
+  AlertDialogCancel,
+  AlertDialogContent,
+  AlertDialogDescription,
+  AlertDialogFooter,
+  AlertDialogHeader,
+  AlertDialogTitle,
+} from "@/components/ui/alert-dialog";
 import { userService } from '@/services/userService';
 import { User } from '@/types/user';
 
@@ -12,6 +22,7 @@ const AccessManagement: React.FC = () => {
   const { toast } = useToast();
   const [pendingUsers, setPendingUsers] = useState<User[]>([]);
   const [isLoading, setIsLoading] = useState(true);
+  const [userToReject, setUserToReject] = useState<{ id: string, fullName: string } | null>(null);
 
   useEffect(() => {
     loadPendingUsers();
@@ -130,7 +141,7 @@ const AccessManagement: React.FC = () => {
                       <Button
                         size="sm"
                         variant="destructive"
-                        onClick={() => handleReject(user.id, user.fullName)}
+                        onClick={() => setUserToReject({ id: user.id, fullName: user.fullName })}
                       >
                         <UserX className="h-4 w-4 mr-1" />
                         Reject
@@ -153,6 +164,36 @@ const AccessManagement: React.FC = () => {
           <li>• Approved users will receive login credentials via email</li>
         </ul>
       </div>
+
+      <AlertDialog open={!!userToReject} onOpenChange={(open) => !open && setUserToReject(null)}>
+        <AlertDialogContent className="bg-white">
+          <AlertDialogHeader>
+            <AlertDialogTitle className="flex flex-col items-center gap-2">
+              <div className="h-12 w-12 bg-red-100 rounded-full flex items-center justify-center">
+                <UserX className="h-6 w-6 text-red-600" />
+              </div>
+              <span>Are you sure?</span>
+            </AlertDialogTitle>
+            <AlertDialogDescription className="text-center">
+              You want to reject this account? This action cannot be undone.
+            </AlertDialogDescription>
+          </AlertDialogHeader>
+          <AlertDialogFooter className="sm:justify-center gap-2">
+            <AlertDialogCancel onClick={() => setUserToReject(null)}>Cancel</AlertDialogCancel>
+            <AlertDialogAction
+              onClick={() => {
+                if (userToReject) {
+                  handleReject(userToReject.id, userToReject.fullName);
+                  setUserToReject(null);
+                }
+              }}
+              className="bg-red-600 hover:bg-red-700 text-white"
+            >
+              Reject
+            </AlertDialogAction>
+          </AlertDialogFooter>
+        </AlertDialogContent>
+      </AlertDialog>
     </div>
   );
 };
