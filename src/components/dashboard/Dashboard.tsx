@@ -2,13 +2,39 @@ import React, { useState, useRef, useCallback, useEffect } from 'react';
 import { useAuth } from '@/context/AuthContext';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import { Button } from '@/components/ui/button';
+import { Input } from '@/components/ui/input';
+import { Badge } from '@/components/ui/badge';
+import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
 import { useToast } from '@/hooks/use-toast';
 import { CalendarDays, UserCheck, Users, User, FileText, CheckCircle, X, Camera, MapPin, AlertCircle } from 'lucide-react';
+import {
+  PieChart, Pie, Cell, ResponsiveContainer, Legend, Tooltip as RechartsTooltip,
+  BarChart, Bar, XAxis, YAxis, CartesianGrid
+} from 'recharts';
 import { attendanceService } from '@/services/attendanceService';
 import { geolocationService, LocationData, DistanceResult } from '@/services/geolocationService';
 
 const Dashboard: React.FC = () => {
   const { user } = useAuth();
+
+  const formatTime = (time: any) => {
+    if (!time) return '-';
+    const s = String(time);
+    if (s.toLowerCase().includes('invalid')) return '-';
+    return s;
+  };
+
+  const formatDate = (date: any, raw: any) => {
+    if (date && !String(date).toLowerCase().includes('invalid')) return date;
+    if (!raw) return '-';
+    try {
+      const d = new Date(raw);
+      if (isNaN(d.getTime())) return '-';
+      return d.toLocaleDateString('id-ID');
+    } catch {
+      return '-';
+    }
+  };
   const { toast } = useToast();
   const [isCheckedIn, setIsCheckedIn] = useState(false);
   const [showCamera, setShowCamera] = useState(false);
@@ -18,6 +44,13 @@ const Dashboard: React.FC = () => {
   const [currentLocation, setCurrentLocation] = useState<LocationData | null>(null);
   const [distanceInfo, setDistanceInfo] = useState<DistanceResult | null>(null);
   const [locationWatchId, setLocationWatchId] = useState<number | null>(null);
+  const [summary, setSummary] = useState<any>(null);
+  const [chartData, setChartData] = useState<{ pieData: any[], barData: any[] } | null>(null);
+  const [searchTerm, setSearchTerm] = useState('');
+  const [statusFilter, setStatusFilter] = useState('all');
+  const [dateFilter, setDateFilter] = useState('');
+  const [attendanceRecords, setAttendanceRecords] = useState<any[]>([]);
+  const [loadingRecords, setLoadingRecords] = useState(true);
   const videoRef = useRef<HTMLVideoElement>(null);
   const canvasRef = useRef<HTMLCanvasElement>(null);
 
@@ -160,42 +193,41 @@ const processAttendance = async () => {
 
     freezeCamera(); // ✅ freeze frame, jangan close modal
 
-    navigator.geolocation.getCurrentPosition(async (pos) => {
-      const lat = pos.coords.latitude;
-      const lon = pos.coords.longitude;
+    const location = await geolocationService.getCurrentLocation();
+    const lat = location.latitude;
+    const lon = location.longitude;
 
-      try {
-        const res = await attendanceService.checkIn(imageData, lat, lon);
-        console.log("Check-in response:", res);
+    try {
+      const res = await attendanceService.checkIn(imageData, lat, lon);
+      console.log("Check-in response:", res);
 
-        if (res.success) {
-          setIsCheckedIn(true);          // tandai sudah checkin
-          setAttendanceMode("checkout"); // ubah tombol jadi checkout
-          toast({
-            title: "Check In Successful",
-            description: `You have successfully checked in at ${new Date().toLocaleTimeString()}`,
-          });
-          stopCamera();
-        } else {
-          setIsCheckedIn(false);         // gagal → tetap dianggap belum checkin
-          setAttendanceMode("checkin");  
-          toast({
-            title: "Check In Failed",
-            description: res.error || "Face not recognized or location invalid",
-            variant: "destructive",
-          });
-        }
-      } catch (err: any) {
-        console.error("Check-in request error:", err);
+      if (res.success) {
+        setIsCheckedIn(true);          // tandai sudah checkin
+        setAttendanceMode("checkout"); // ubah tombol jadi checkout
+        toast({
+          title: "Check In Successful",
+          description: `You have successfully checked in at ${new Date().toLocaleTimeString()}`,
+        });
+        stopCamera();
+      } else {
+        setIsCheckedIn(false);         // gagal → tetap dianggap belum checkin
+        setAttendanceMode("checkin");
         toast({
           title: "Check In Failed",
-          description: err.message,
+          description: res.error || "Face not recognized or location invalid",
           variant: "destructive",
         });
-      } finally {
-        setIsProcessing(false);
       }
-    });
+    } catch (err: any) {
+      console.error("Check-in request error:", err);
+      toast({
+        title: "Check In Failed",
+        description: err.message,
+        variant: "destructive",
+      });
+    } finally {
+      setIsProcessing(false);
+    }
   } catch (error) {
     console.error("Attendance processing error:", error);
     toast({
@@ -217,50 +249,41 @@ const processAttendance = async () => {
 
     freezeCamera(); // ✅ freeze frame setelah capture
 
-    navigator.geolocation.getCurrentPosition(async (pos) => {
-      const lat = pos.coords.latitude;
-      const lon = pos.coords.longitude;
+    const location = await geolocationService.getCurrentLocation();
+    const lat = location.latitude;
+    const lon = location.longitude;
 
-      try {
-        const res = await attendanceService.checkOut(imageData, lat, lon);
-        console.log("Check-out response:", res);
+    try {
+      const res = await attendanceService.checkOut(imageData, lat, lon);
+      console.log("Check-out response:", res);
 
-        if (res.success) {
-          setIsCheckedIn(false);        // tandai sudah checkout
-          setAttendanceMode("checkin"); // tombol kembali checkin
-          stopCamera();
-          toast({
-            title: "Check Out Successful",
-            description: `You have successfully checked out at ${new Date().toLocaleTimeString()}`,
-          });
-        } else {
-          setIsCheckedIn(true);         // gagal checkout → user tetap dianggap checkin
-          setAttendanceMode("checkout");
-          toast({
-            title: "Check Out Failed",
-            description: res.error || "Face not recognized or location invalid",
-            variant: "destructive"
-          });
-        }
-      } catch (err: any) {
-        console.error("Check-out request error:", err);
+      if (res.success) {
+        setIsCheckedIn(false);        // tandai sudah checkout
+        setAttendanceMode("checkin"); // tombol kembali checkin
+        stopCamera();
+        toast({
+          title: "Check Out Successful",
+          description: `You have successfully checked out at ${new Date().toLocaleTimeString()}`,
+        });
+      } else {
+        setIsCheckedIn(true);         // gagal checkout → user tetap dianggap checkin
+        setAttendanceMode("checkout");
         toast({
           title: "Check Out Failed",
-          description: err.message,
-          variant: "destructive",
+          description: res.error || "Face not recognized or location invalid",
+          variant: "destructive"
         });
-      } finally {
-        setIsProcessing(false);
       }
-    }, (err) => {
-      console.error("Geolocation error:", err);
+    } catch (err: any) {
+      console.error("Check-out request error:", err);
       toast({
-        title: "Location Error",
-        description: "Unable to get your location",
-        variant: "destructive"
+        title: "Check Out Failed",
+        description: err.message,
+        variant: "destructive",
       });
+    } finally {
       setIsProcessing(false);
-    }, { enableHighAccuracy: true });
+    }
 
   } catch (error) {
     console.error("Checkout processing error:", error);
@@ -275,6 +298,100 @@ const processAttendance = async () => {
 
 const [attendanceMode, setAttendanceMode] = useState<"checkin" | "checkout" | null>(null);
 const [todayRecord, setTodayRecord] = useState<any>(null);
+
+// Fetch summary for HR/Admin
+useEffect(() => {
+  if (user?.role === 'HR' || user?.role === 'Admin' || user?.role === 'Super Admin') {
+    const fetchSummary = async () => {
+      try {
+        const res = await attendanceService.getSummary(dateFilter);
+        setSummary(res);
+      } catch (err) {
+        console.error("Failed to fetch summary:", err);
+      }
+    };
+    fetchSummary();
+  }
+}, [user, dateFilter]);
+
+useEffect(() => {
+  const fetchCharts = async () => {
+    try {
+      const data = await attendanceService.getChartData(dateFilter);
+      setChartData(data);
+    } catch (err) {
+      console.error("Failed to fetch chart data:", err);
+    }
+  };
+  fetchCharts();
+}, [dateFilter]);
+
+useEffect(() => {
+  const fetchRecords = async () => {
+    setLoadingRecords(true);
+    try {
+      let records;
+      if (user?.role === 'Karyawan') {
+        records = await attendanceService.getAttendanceHistory();
+      } else {
+        records = await attendanceService.getAllAttendance();
+      }
+      setAttendanceRecords(records);
+    } catch (err) {
+      console.error("Failed to fetch attendance records:", err);
+    } finally {
+      setLoadingRecords(false);
+    }
+  };
+  fetchRecords();
+}, [user]);
+
+const filteredRecords = attendanceRecords.filter(record => {
+  const matchesSearch = user?.role === 'Karyawan'
+    ? true
+    : (record.full_name || record.username || record.email || '').toLowerCase().includes(searchTerm.toLowerCase());
+
+  const matchesStatus = statusFilter === 'all' || record.status === statusFilter;
+
+  // Date input is YYYY-MM-DD, record date might be ISO or DD/MM/YYYY
+  const matchesDate = !dateFilter ||
+    (record.date && record.date.includes(dateFilter.split('-').reverse().join('/'))) ||
+    (record.dateRaw && record.dateRaw.startsWith(dateFilter));
+
+  return matchesSearch && matchesStatus && matchesDate;
+});
+
+const getStatusBadge = (status: string) => {
+  switch (status) {
+    case 'Present':
+      return <Badge className="bg-green-100 text-green-800 hover:bg-green-200 border-none">Present</Badge>;
+    case 'Late':
+      return <Badge className="bg-yellow-100 text-yellow-800 hover:bg-yellow-200 border-none">Late</Badge>;
+    case 'Absent':
+      return <Badge className="bg-red-100 text-red-800 hover:bg-red-200 border-none">Absent</Badge>;
+    default:
+      return <Badge variant="secondary">{status || 'Unknown'}</Badge>;
+  }
+};
+
+const exportToExcel = async () => {
+  try {
+    const blob = await attendanceService.exportAttendance();
+    const url = window.URL.createObjectURL(new Blob([blob]));
+    const link = document.createElement("a");
+    link.href = url;
+    link.setAttribute("download", "attendance_records.xlsx");
+    document.body.appendChild(link);
+    link.click();
+    link.remove();
+  } catch (err) {
+    toast({
+      title: "Export Failed",
+      description: "Could not export attendance data",
+      variant: "destructive",
+    });
+  }
+};
 
 // 🔹 Sinkronkan status checkin/checkout dari backend
 useEffect(() => {
@@ -549,55 +666,252 @@ const attendedDays = monthlyRecords.filter(r => r.check_in_time).length;
       )}
 
       {/* Stats */}
-      <div className="grid grid-cols-1 md:grid-cols-3 gap-6">
-  {stats ? (
-    <>
-      <Card className="hover:shadow-lg transition-shadow">
-        <CardContent className="p-6">
-          <div className="flex items-center justify-between">
-            <div>
-              <p className="text-sm font-medium text-gray-600">This Month Attendance</p>
-              <p className="text-2xl font-bold text-gray-900 mt-1">{stats.monthAttendance}</p>
-            </div>
-            <div className="h-12 w-12 bg-blue-100 rounded-lg flex items-center justify-center">
-              <CalendarDays className="h-6 w-6 text-blue-600" />
-            </div>
-          </div>
-        </CardContent>
-      </Card>
+      <div className={`grid grid-cols-1 ${user?.role === 'Karyawan' ? 'md:grid-cols-3' : 'md:grid-cols-4'} gap-6`}>
+        {user?.role === 'Karyawan' ? (
+          stats ? (
+            <>
+              <Card className="hover:shadow-lg transition-shadow">
+                <CardContent className="p-6">
+                  <div className="flex items-center justify-between">
+                    <div>
+                      <p className="text-sm font-medium text-gray-600">This Month Attendance</p>
+                      <p className="text-2xl font-bold text-gray-900 mt-1">{stats.monthAttendance}</p>
+                    </div>
+                    <div className="h-12 w-12 bg-blue-100 rounded-lg flex items-center justify-center">
+                      <CalendarDays className="h-6 w-6 text-blue-600" />
+                    </div>
+                  </div>
+                </CardContent>
+              </Card>
 
-      <Card className="hover:shadow-lg transition-shadow">
-        <CardContent className="p-6">
-          <div className="flex items-center justify-between">
-            <div>
-              <p className="text-sm font-medium text-gray-600">On Time Rate</p>
-              <p className="text-2xl font-bold text-gray-900 mt-1">{stats.onTimeRate}</p>
-            </div>
-            <div className="h-12 w-12 bg-blue-100 rounded-lg flex items-center justify-center">
-              <UserCheck className="h-6 w-6 text-blue-600" />
-            </div>
-          </div>
-        </CardContent>
-      </Card>
+              <Card className="hover:shadow-lg transition-shadow">
+                <CardContent className="p-6">
+                  <div className="flex items-center justify-between">
+                    <div>
+                      <p className="text-sm font-medium text-gray-600">On Time Rate</p>
+                      <p className="text-2xl font-bold text-gray-900 mt-1">{stats.onTimeRate}</p>
+                    </div>
+                    <div className="h-12 w-12 bg-blue-100 rounded-lg flex items-center justify-center">
+                      <UserCheck className="h-6 w-6 text-blue-600" />
+                    </div>
+                  </div>
+                </CardContent>
+              </Card>
 
-      <Card className="hover:shadow-lg transition-shadow">
-        <CardContent className="p-6">
-          <div className="flex items-center justify-between">
-            <div>
-              <p className="text-sm font-medium text-gray-600">Total Working Days</p>
-              <p className="text-2xl font-bold text-gray-900 mt-1">{stats.totalWorkingDays}</p>
-            </div>
-            <div className="h-12 w-12 bg-blue-100 rounded-lg flex items-center justify-center">
-              <Users className="h-6 w-6 text-blue-600" />
-            </div>
-          </div>
-        </CardContent>
-      </Card>
-      </>
-      ) : (
-        <p className="text-gray-500">Loading stats...</p>
+              <Card className="hover:shadow-lg transition-shadow">
+                <CardContent className="p-6">
+                  <div className="flex items-center justify-between">
+                    <div>
+                      <p className="text-sm font-medium text-gray-600">Total Working Days</p>
+                      <p className="text-2xl font-bold text-gray-900 mt-1">{stats.totalWorkingDays}</p>
+                    </div>
+                    <div className="h-12 w-12 bg-blue-100 rounded-lg flex items-center justify-center">
+                      <Users className="h-6 w-6 text-blue-600" />
+                    </div>
+                  </div>
+                </CardContent>
+              </Card>
+            </>
+          ) : (
+            <p className="text-gray-500">Loading stats...</p>
+          )
+        ) : (
+          summary ? (
+            <>
+              <Card className="hover:shadow-lg transition-shadow">
+                <CardContent className="p-6 text-center">
+                  <p className="text-sm font-medium text-gray-600">Total Employees</p>
+                  <p className="text-3xl font-bold text-gray-900 mt-2">{summary.totalEmployees}</p>
+                </CardContent>
+              </Card>
+              <Card className="hover:shadow-lg transition-shadow">
+                <CardContent className="p-6 text-center">
+                  <p className="text-sm font-medium text-gray-600">Present Today</p>
+                  <p className="text-3xl font-bold text-green-600 mt-2">{summary.presentToday}</p>
+                </CardContent>
+              </Card>
+              <Card className="hover:shadow-lg transition-shadow">
+                <CardContent className="p-6 text-center">
+                  <p className="text-sm font-medium text-gray-600">Late Today</p>
+                  <p className="text-3xl font-bold text-yellow-600 mt-2">{summary.lateToday}</p>
+                </CardContent>
+              </Card>
+              <Card className="hover:shadow-lg transition-shadow">
+                <CardContent className="p-6 text-center">
+                  <p className="text-sm font-medium text-gray-600">Absent Today</p>
+                  <p className="text-3xl font-bold text-red-600 mt-2">{summary.absentToday}</p>
+                </CardContent>
+              </Card>
+            </>
+          ) : (
+            <p className="text-gray-500">Loading summary...</p>
+          )
         )}
       </div>
+
+      {/* Charts */}
+      <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
+        <Card>
+          <CardHeader>
+            <CardTitle className="text-lg font-semibold">Daily Attendance Status</CardTitle>
+          </CardHeader>
+          <CardContent className="h-[350px]">
+            {chartData ? (
+              <ResponsiveContainer width="100%" height="100%">
+                <PieChart>
+                  <Pie
+                    data={chartData.pieData}
+                    cx="50%"
+                    cy="50%"
+                    innerRadius={80}
+                    outerRadius={100}
+                    paddingAngle={5}
+                    dataKey="value"
+                    label={({ name, value }) => `${name} (${value})`}
+                  >
+                    {chartData.pieData.map((entry, index) => (
+                      <Cell key={`cell-${index}`} fill={entry.color} />
+                    ))}
+                  </Pie>
+                  <RechartsTooltip />
+                  <Legend verticalAlign="bottom" height={36} />
+                </PieChart>
+              </ResponsiveContainer>
+            ) : (
+              <div className="h-full flex items-center justify-center text-gray-500">
+                Loading daily status charts...
+              </div>
+            )}
+          </CardContent>
+        </Card>
+
+        <Card>
+          <CardHeader>
+            <CardTitle className="text-lg font-semibold">Weekly Attendance Status</CardTitle>
+          </CardHeader>
+          <CardContent className="h-[350px]">
+            {chartData ? (
+              <ResponsiveContainer width="100%" height="100%">
+                <BarChart data={chartData.barData}>
+                  <CartesianGrid strokeDasharray="3 3" vertical={false} />
+                  <XAxis dataKey="name" axisLine={false} tickLine={false} />
+                  <YAxis axisLine={false} tickLine={false} />
+                  <RechartsTooltip />
+                  <Legend verticalAlign="bottom" height={36} />
+                  <Bar dataKey="present" fill="#10b981" radius={[4, 4, 0, 0]} name="Present" />
+                  <Bar dataKey="absent" fill="#ef4444" radius={[4, 4, 0, 0]} name="Absent" />
+                </BarChart>
+              </ResponsiveContainer>
+            ) : (
+              <div className="h-full flex items-center justify-center text-gray-500">
+                Loading weekly attendance charts...
+              </div>
+            )}
+          </CardContent>
+        </Card>
+      </div>
+
+      {/* Attendance Records Table */}
+      <Card>
+        <CardHeader>
+          <div className="flex flex-col md:flex-row items-start md:items-center justify-between space-y-4 md:space-y-0">
+            <CardTitle className="flex items-center space-x-2">
+              <CalendarDays className="h-5 w-5" />
+              <span>Attendance Records</span>
+            </CardTitle>
+
+            <div className="flex flex-col md:flex-row space-y-2 md:space-y-0 md:space-x-4">
+              {user?.role !== 'Karyawan' && (
+                <Input
+                  placeholder="Search employees..."
+                  value={searchTerm}
+                  onChange={(e) => setSearchTerm(e.target.value)}
+                  className="w-full md:w-48"
+                />
+              )}
+
+              <Select value={statusFilter} onValueChange={setStatusFilter}>
+                <SelectTrigger className="w-full md:w-32">
+                  <SelectValue placeholder="All Status" />
+                </SelectTrigger>
+                <SelectContent className="bg-white">
+                  <SelectItem value="all">All Status</SelectItem>
+                  <SelectItem value="Present">Present</SelectItem>
+                  <SelectItem value="Late">Late</SelectItem>
+                  <SelectItem value="Absent">Absent</SelectItem>
+                </SelectContent>
+              </Select>
+
+              <Input
+                type="date"
+                value={dateFilter}
+                onChange={(e) => setDateFilter(e.target.value)}
+                className="w-full md:w-40"
+              />
+
+              {user?.role !== 'Karyawan' && (
+                <Button
+                  onClick={exportToExcel}
+                  className="bg-green-500 hover:bg-green-600 text-white"
+                >
+                  <FileText className="h-4 w-4 mr-2" />
+                  Export Excel
+                </Button>
+              )}
+            </div>
+          </div>
+        </CardHeader>
+        <CardContent>
+          <div className="overflow-x-auto">
+            <table className="w-full">
+              <thead>
+                <tr className="border-b">
+                  {user?.role !== 'Karyawan' && <th className="text-left py-3 px-4 font-medium text-gray-900">Employee</th>}
+                  <th className="text-left py-3 px-4 font-medium text-gray-900">Date</th>
+                  <th className="text-left py-3 px-4 font-medium text-gray-900">Check In</th>
+                  <th className="text-left py-3 px-4 font-medium text-gray-900">Check Out</th>
+                  <th className="text-left py-3 px-4 font-medium text-gray-900">Working Hours</th>
+                  <th className="text-left py-3 px-4 font-medium text-gray-900">Status</th>
+                </tr>
+              </thead>
+              <tbody>
+                {loadingRecords ? (
+                  <tr>
+                    <td colSpan={user?.role === 'Karyawan' ? 5 : 6} className="text-center py-8 text-gray-500">
+                      Loading attendance records...
+                    </td>
+                  </tr>
+                ) : filteredRecords.length === 0 ? (
+                  <tr>
+                    <td colSpan={user?.role === 'Karyawan' ? 5 : 6} className="text-center py-8">
+                      <div className="flex flex-col items-center">
+                        <CalendarDays className="h-12 w-12 text-gray-400 mb-2" />
+                        <h3 className="text-lg font-medium text-gray-900">No Records Found</h3>
+                        <p className="text-gray-600">No attendance records match your filters.</p>
+                      </div>
+                    </td>
+                  </tr>
+                ) : (
+                  filteredRecords.map((record) => (
+                    <tr key={record.id} className="border-b hover:bg-gray-50">
+                      {user?.role !== 'Karyawan' && (
+                        <td className="py-3 px-4 font-medium">{record.full_name || record.username || record.email}</td>
+                      )}
+                      <td className="py-3 px-4">
+                        {formatDate(record.date, record.dateRaw)}
+                      </td>
+                      <td className="py-3 px-4 font-mono">{formatTime(record.check_in_time)}</td>
+                      <td className="py-3 px-4 font-mono">{formatTime(record.check_out_time)}</td>
+                      <td className="py-3 px-4 font-mono">{formatTime(record.working_hours)}</td>
+                      <td className="py-3 px-4">{getStatusBadge(record.status)}</td>
+                    </tr>
+                  ))
+                )}
+              </tbody>
+            </table>
+          </div>
+        </CardContent>
+      </Card>
     </div>
   );
 };
